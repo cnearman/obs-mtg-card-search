@@ -30,3 +30,11 @@
 *.exe
 *.out
 *.app
+*.vcxproj
+*.filters
+*.sln
+*.stamp
+*.depend
+Debug/
+edhrec-stream.dir/
+*.exp
