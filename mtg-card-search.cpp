@@ -1,5 +1,5 @@
 #include <ostream>
-#include <filesystem>
+#include <exception>
 
 #include "obs-module.h"
 #include <obs.hpp>
@@ -26,6 +26,7 @@
 #include <QLineEdit>
 
 #include <obs-frontend-api.h>
+#include "../../UI/qt-wrappers.cpp"
 
 using json = nlohmann::json;
 
@@ -47,11 +48,28 @@ struct cardData {
 	std::string cardImageUri;
 };
 
+class imageRetrievalException : public std::exception {
+	virtual const char *what() const throw()
+	{
+		return "Failed to retrieve image.";
+	}
+} imageRetrievalEx;
+
+class searchException : public std::exception {
+	virtual const char *what() const throw()
+	{
+		return "Failed to complete search.";
+	}
+} searchEx;
+
 class MtgCardSearchWidget : public QDockWidget {
 public:
 	MtgCardSearchWidget(QWidget *parent = 0)
 		: QDockWidget(parent), reopenShown_(false)
-	{		
+	{
+
+		main = (QMainWindow *)obs_frontend_get_main_window();
+
 		const char* appdataPath = (getenv("appdata") + APPDATA_FOLDER_NAME).c_str();
 		std::filesystem::create_directory(appdataPath);
 		appdataPath_ = (std::string)appdataPath;
@@ -119,6 +137,7 @@ private:
 	QComboBox* sourceCombo_;
 	QLineEdit* cardName_;
 	std::string appdataPath_;
+	QMainWindow* main;
 
 	static bool add_sources(void *data, obs_source_t *source)
 	{
@@ -154,17 +173,29 @@ private:
 	}
 
 	void onUpdateButtonClick()
-	{
-		std::string query = cardName_->text().toLocal8Bit().data();
-		std::vector<cardData> cards = search(query);
-		if (cards.size() > 0) {
-			cardData targetCard = cards[0];
-			cardImage newImage =
-				getCardImage(targetCard.cardImageUri);
-			const char *filename = (appdataPath_ + targetCard.name + PngExtension).c_str();
-			saveCardImage(filename, newImage.imageData,
-				      newImage.dataSize);
-			updateCardImageSource(filename);
+{
+		std::string query =
+			cardName_->text().toLocal8Bit().data();
+		try {
+			std::vector<cardData> cards = search(query);
+			if (cards.size() > 0) {
+				cardData targetCard = cards[0];
+				cardImage newImage =
+					getCardImage(targetCard.cardImageUri);
+				const char *filename =
+					(appdataPath_ + targetCard.name +
+						PngExtension)
+						.c_str();
+				saveCardImage(filename, newImage.imageData,
+						newImage.dataSize);
+				updateCardImageSource(filename);
+			}
+		} catch (imageRetrievalException &ex) {
+			OBSMessageBox::warning(main, "Error", "Unable to succesfully locate image.");
+		} catch (searchException &ex) {
+			OBSMessageBox::warning(main, "Error", "Search failed.");
+		} catch (std::exception& ex) {
+			OBSMessageBox::warning(main, "Error", ex.what());
 		}
 	}
 
@@ -172,19 +203,26 @@ private:
 	{
 		std::vector<cardData> searchResult;
 		std::string requestUrl = SCRYFALL_URL + "?q=" + query;
-		cpr::AsyncResponse responsePromise =
-			cpr::GetAsync((cpr::Url{requestUrl}));
-		cpr::Response searchResponse = responsePromise.get();
+		try {
+			cpr::AsyncResponse responsePromise =
+				cpr::GetAsync((cpr::Url{requestUrl}));
+			cpr::Response searchResponse = responsePromise.get();
+			//TODO: Add Try-catch and error handling for search
+			json result;
+			result = json::parse(searchResponse.text);
 
-		json result;
-		result = json::parse(searchResponse.text);
-
-		auto cardResults = result["data"];
-		for (json::iterator it = cardResults.begin();
-		     it != cardResults.end(); ++it) {
-			searchResult.push_back(getCardData(it.value()));
+			auto cardResults = result["data"];
+			for (json::iterator it = cardResults.begin();
+			     it != cardResults.end(); ++it) {
+				searchResult.push_back(getCardData(it.value()));
+			}
+		} catch (std::exception &e) {
+			blog(LOG_ERROR, "Search failed.");
 		}
 
+		if (searchResult.empty()) {
+			OBSMessageBox::information(main, "No results", "Search did not find any results.");
+		}
 		return searchResult;
 	}
 
@@ -201,13 +239,23 @@ private:
 	cardImage getCardImage(std::string cardUri)
 	{
 		cardImage result;
-		cpr::AsyncResponse requestPromise =
-			cpr::GetAsync((cpr::Url{cardUri}));
-		cpr::Response cardResponse = requestPromise.get();
-		const char *resultText = &cardResponse.text[0];
-		result.dataSize = cardResponse.downloaded_bytes;
-		result.imageData = resultText;
+		try {
+			cpr::AsyncResponse requestPromise =
+				cpr::GetAsync((cpr::Url{cardUri}));
+			cpr::Response cardResponse = requestPromise.get();
+
+			//TODO: Handle multiple results instead of just getting the first
+			const char *resultText = &cardResponse.text[0];
+			result.dataSize = cardResponse.downloaded_bytes;
+			result.imageData = resultText;
+		} catch (int e) {
+			blog(LOG_ERROR,
+			     "Failed to retrieve image.");
+			throw imageRetrievalEx;
+		}
+
 		return result;
+
 	}
 
 	void saveCardImage(const char *filename, const char *imageData,
