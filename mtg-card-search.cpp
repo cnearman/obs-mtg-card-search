@@ -27,6 +27,7 @@
 
 #include <obs-frontend-api.h>
 #include "../../UI/qt-wrappers.cpp"
+using namespace std;
 
 using json = nlohmann::json;
 
@@ -201,8 +202,10 @@ private:
 
 	std::vector<cardData> search(std::string query)
 	{
-		std::vector<cardData> searchResult;
-		std::string requestUrl = SCRYFALL_URL + "?q=" + query;
+		std::vector<cardData> searchResult;		
+
+		std::string requestUrl =
+			SCRYFALL_URL + "?q=" + encodeUrl(query);
 		try {
 			cpr::AsyncResponse responsePromise =
 				cpr::GetAsync((cpr::Url{requestUrl}));
@@ -284,6 +287,34 @@ private:
 		obs_source_update(target, settings);
 		obs_source_release(target);
 		obs_data_release(settings);
+	}
+
+	std::string encodeUrl(std::string url)
+	{
+		static auto hex_digt = "0123456789ABCDEF";
+
+		std::string result;
+		result.reserve(url.size() << 1);
+
+		for (auto ch : url) {
+			if ((ch >= '0' && ch <= '9') ||
+			    (ch >= 'A' && ch <= 'Z') ||
+			    (ch >= 'a' && ch <= 'z') || ch == '-' ||
+			    ch == '_' || ch == '!' || ch == '\'' || ch == '(' ||
+			    ch == ')' || ch == '*' || ch == '~' || ch == '.') {
+				result.push_back(ch);
+			} else {
+				result +=
+					std::string("%") +
+					hex_digt[static_cast<unsigned char>(
+							 ch) >>
+						 4] +
+					hex_digt[static_cast<unsigned char>(ch) &
+						 15];
+			}
+		}
+
+		return result;
 	}
 };
 
